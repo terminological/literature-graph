@@ -1,0 +1,565 @@
+build:
+
+- fixGeniaRecord: |
+    MATCH (a:Article),(b:Article) 
+    WHERE a.title=~"GENIA corpus.*" 
+    AND b.title=~"GENIA corpus.*"
+    AND a<>b
+    CALL apoc.refactor.mergeNodes([a,b],{mergeRels:true}) 
+    YIELD node RETURN COUNT(*)
+
+# AUTHORS - DISAMBIGUATE
+- mergeAuthorsWithSameOrcid: | # orchid matches: combine clause here causes error
+    MATCH (n:Author), (o:Author) 
+    WHERE n.orcid = o.orcid 
+    AND n<>o 
+    CALL apoc.refactor.mergeNodes([n,o],{mergeRels:true}) 
+    YIELD node RETURN COUNT(*)
+
+- mergeAuthorsWithExactFullname: |     # Exact fullname match
+    MATCH (n:Author), (o:Author) 
+    WHERE n.lastName = o.lastName 
+    AND n.firstName = o.firstName 
+    AND n<>o 
+    CALL apoc.refactor.mergeNodes([n,o],{mergeRels:true}) 
+    YIELD node RETURN COUNT(*)
+
+- mergeDuplicateAuthorsOnArticle: |     # Exact fullname match
+    MATCH (n:Author) <-[:HAS_AUTHOR]- (:Article) -[:HAS_AUTHOR]-> (o:Author) 
+    WHERE n.authorLabel = o.authorLabel 
+    AND n<>o 
+    CALL apoc.refactor.mergeNodes([n,o],{mergeRels:true}) 
+    YIELD node RETURN COUNT(*)
+
+- mergeAuthorsWithSimilarNameAndAffiliation: | # Short name match plus similar affiliation
+    MATCH (n:Author) -[:HAS_AFFILIATION]-> () -[:SIMILAR_TO]-> () <-[:HAS_AFFILIATION]- (o:Author) 
+    WHERE n.authorLabel = o.authorLabel 
+    AND n<>o 
+    CALL apoc.refactor.mergeNodes([n,o],{mergeRels:true}) 
+    YIELD node RETURN COUNT(*)
+
+- createAuthorCoauthor: | # Create coauthor network
+    MATCH (n:Author) <-[:HAS_AUTHOR]- (m:Article) -[:HAS_AUTHOR]-> (o:Author) 
+    WHERE n<>o 
+    CREATE (n)-[r:CO_AUTHOR]->(o)
+
+- mergeAuthorsWithSimilarNameAndCoauthors: | # Merge co-authors with same name
+    MATCH (n:Author), (o:Author) 
+    WHERE n.authorLabel = o.authorLabel AND id(n) < id(o)
+    WITH id(n) as nid, id(o) as oid
+    MATCH (m)-[:CO_AUTHOR]-> (:Author) <-[:CO_AUTHOR]-(p)
+    WHERE id(m)=nid AND id(p)=oid 
+    CALL apoc.refactor.mergeNodes([m,p],{mergeRels:true}) 
+    YIELD node RETURN COUNT(*);
+
+- deleteCircularCoauthor: | # Delete any that have been merged together
+    MATCH (n:Author) -[r:CO_AUTHOR]-> (n:Author) DELETE r
+
+- deleteNullAuthors: | # Tidy up null authors
+    MATCH (n:Author)-[r]-() WHERE n.lastName IS NULL DELETE r,n
+
+- createAuthorCoauthorCommunity: | # Community
+    CALL algo.louvain('Author', 'CO_AUTHOR', {direction:'both', write:true, writeProperty:'community'}) 
+    YIELD nodes, communityCount, iterations, loadMillis, computeMillis, writeMillis;
+
+# as co-author community graph is disconnected we look at harmonic centrality
+- createAuthorCoauthorHarmonicCentrality: | # https://infoscience.epfl.ch/record/200525/files/[EN]ASNA09.pdf;
+    CALL algo.closeness.harmonic('Author','CO_AUTHOR',{direction:'both', write:true, writeProperty:'harmonic'})
+    YIELD nodes,loadMillis, computeMillis, writeMillis;
+
+- deleteAuthorCites: | # Delete any that have been merged together
+    MATCH (:Author) -[r:CITES]-> (:Author) DELETE r
+
+- createAuthorCites: | # The CITES graph is disconnected. 
+    MATCH (n:Author) <-[:HAS_AUTHOR]- () -[:HAS_REFERENCE]-> () -[:HAS_AUTHOR]-> (o:Author) 
+    WHERE n<>o
+    CREATE (n)-[r:CITES]->(o)
+
+- createAuthorCitesClosenessCentrality: | # closeness algorithm
+    CALL algo.closeness.harmonic('Author','CITES',{direction:'both',write:true, writeProperty:'citesHarmonic'})
+    YIELD nodes,loadMillis, computeMillis, writeMillis;
+
+- createAuthorPageRank: | # PageRank
+    CALL algo.pageRank('Author', 'CO_AUTHOR', {iterations:20, dampingFactor:0.85, write:true, writeProperty:"pagerank"})
+    YIELD nodes, iterations, loadMillis, computeMillis, writeMillis, dampingFactor, write, writeProperty
+
+    
+# ARTICLES
+
+- createArticlePageRank: | # PageRank
+    CALL algo.pageRank('Article', 'HAS_REFERENCE', {iterations:20, dampingFactor:0.85, write:true, writeProperty:"pagerank"})
+    YIELD nodes, iterations, loadMillis, computeMillis, writeMillis, dampingFactor, write, writeProperty
+
+- setArticleAge: | # PageRank
+    MATCH (a:Article) 
+    SET a.age=duration.inDays(a.date,date()).days,
+    a.timeWeightedPagerank=a.pagerank*365/(duration.inDays(a.date,date()).days)
+
+- flattenFirstAuthorName: |
+    MATCH (a:Article) -[r:HAS_AUTHOR]-> (b:Author) 
+    WHERE r.isFirstAuthor = true
+    SET a.fullName = b.lastName+", "+b.firstName,
+    a.firstName = b.firstName,
+    a.lastName = b.lastName
+
+- createArticleReferencedCommunity: | # Community
+    CALL algo.louvain('Article', 'HAS_REFERENCE', {direction:'both', write:true, writeProperty:'articleCommunity'}) 
+    YIELD nodes, communityCount, iterations, loadMillis, computeMillis, writeMillis;
+
+
+# MESH_CODES
+- deleteMeshCooccur: | # MESH terms
+    MATCH (:MeshCode)-[u:CO_OCCUR]->(:MeshCode) DELETE u
+
+- createMeshCodeCooccur: | # Create single CO-OCCUR relationships with count - quite slow - 370 secs
+    MATCH (n:MeshCode) <-[:HAS_MESH]- (m:Article) -[:HAS_MESH]-> (o:MeshCode)
+    WHERE n<>o
+    WITH n, o, count(distinct(m)) AS cooccurrences
+    MATCH (n),(o)
+    CREATE (n)-[r:CO_OCCUR]->(o)
+    SET r.cooccurrences = cooccurrences
+    RETURN count(r)
+
+- createMeshCodeOccurencesCount: | # set up counts
+    MATCH (n:Article)-[u:HAS_MESH]->(m:MeshCode) 
+    WITH m,count(n) as total 
+    MATCH (m:MeshCode) 
+    SET m.occurrences=total
+
+- createMeshCodeCooccurMutualInformation: | # create pmi on relationship
+    MATCH (x:MeshCode) 
+    WITH sum(x.occurrences) as total
+    MATCH (m:MeshCode)-[r:CO_OCCUR]->(n:MeshCode) 
+    SET 
+    r.pmi = log( (toFloat(r.cooccurrences)*total) / (m.occurrences*n.occurrences) ),
+    r.probability = toFloat(r.cooccurrences)/total,
+    r.npmi = - log( (toFloat(r.cooccurrences)*total) / (m.occurrences*n.occurrences) ) / log ( toFloat(r.cooccurrences)/total ),
+    r.total = total
+
+# KEY WORDS
+
+- mergeKeywordsIgnoreCase: |
+    MATCH (n:Keyword), (o:Keyword) 
+    WHERE lower(n.term) = lower(o.term) 
+    AND n<>o 
+    CALL apoc.refactor.mergeNodes([n,o],{mergeRels:true}) 
+    YIELD node RETURN *
+
+- deleteKeywordCooccur: | # Keywords
+    MATCH (:Keyword)-[u:CO_OCCUR]->(:Keyword) DELETE u
+
+- createKeywordCooccur: | # Create single CO-OCCUR relationships with count - quite slow - 370 secs
+    MATCH (n:Keyword) <-[:HAS_KEYWORD]- (m:Article) -[:HAS_KEYWORD]-> (o:Keyword)
+    WHERE n<>o
+    WITH n, o, count(distinct(m)) AS cooccurrences
+    MATCH (n),(o)
+    CREATE (n)-[r:CO_OCCUR]->(o)
+    SET r.cooccurrences = cooccurrences
+    RETURN count(r)
+
+- createKeywordOccurencesCount: | # set up counts
+    MATCH (n:Article)-[u:HAS_KEYWORD]->(m:Keyword) 
+    WITH m,count(n) as total 
+    MATCH (m) SET m.occurrences=total
+
+- createKeywordCooccurMutualInformation: | # create pmi on relationship
+    MATCH (x:Keyword) WITH sum(x.occurrences) as total
+    MATCH (m:Keyword)-[r:CO_OCCUR]->(n:Keyword) 
+    SET 
+    r.pmi = log( (toFloat(r.cooccurrences)*total) / (m.occurrences*n.occurrences) ),
+    r.probability = toFloat(r.cooccurrences)/total,
+    r.npmi = - log( (toFloat(r.cooccurrences)*total) / (m.occurrences*n.occurrences) ) / log ( toFloat(r.cooccurrences)/total ),
+    r.total = total
+
+analyse:
+
+# ARTICLES
+  getArticlesWithMatchingTitles: | # matching titles - sometimes this is not a duplicate
+    MATCH (n:Article), (m:Article) 
+    WHERE n.title <> "" 
+    AND n.title = m.title 
+    AND n<>m 
+    RETURN n.title,n.pmid,n.doi,m.title,m.pmid,m.doi
+
+  getArticlesWithMatchingDois: | # matching dois case insensitive - this is always a duplicate
+    MATCH (n:Article), (m:Article) 
+    WHERE toUpper(n.doi) = toUpper(m.doi) 
+    AND n<>m 
+    RETURN n.title,n.pmid,n.doi,m.title,m.pmid,m.doi
+
+  getArticlesWithNoRefs: |    # articles with no references
+    MATCH (source:Article) 
+    WHERE NOT (source)-[:HAS_REFERENCE]-()
+    RETURN source
+
+  getArticlesByAge: |
+    MATCH (a:Article)
+    WHERE a.date IS NOT NULL
+    RETURN floor(duration.inMonths(a.date,date()).months/3) as qtr, 
+    count(a) as articles
+    ORDER BY qtr ASC
+
+# TODO: Ordered authors + journal name
+# collect(b.lastName) as authors,
+  getArticlesByPagerank: |
+    MATCH (a:Article)<-[r:HAS_REFERENCE*0..]-()
+    RETURN DISTINCT
+    a.title as title, 
+    a.doi as doi, 
+    a.pmid as pmid, 
+    a.date as date, 
+    a.pagerank as pagerank, 
+    a.journal as journal,
+    a.articleCommunity as articleCommunity,  
+    a.citedByCount as citedByCount,
+    count(r) as domainCitedByCount,
+    id(a) as nodeId,  
+    a as node
+    ORDER by a.pagerank DESC
+    
+  getArticlesByJournal: |
+    MATCH (b:Article)
+    RETURN DISTINCT b.journal as journal, 
+    sum(b.pagerank) as totalPagerank, 
+    count(b) as articles,
+    sum(b.pagerank)/count(b) as avgPagerank,
+    collect(id(b)) as ids 
+    ORDER BY totalPagerank DESC
+  
+  getArticleCommunityTitlesAbstracts: |
+    MATCH (a:Article)
+    RETURN
+    id(a) as nodeId,
+    a.articleCommunity as articleCommunity,
+    a.title as title,
+    a.abstract as abstract
+    
+# AUTHORS
+
+  getAuthorCoauthorConnectedness: | # Graph connectedness - generally shows that the graph is disconnected
+    CALL algo.unionFind.stream('Author', 'CO_AUTHOR', {})
+    YIELD nodeId,setId
+    RETURN setId,count(*) as size_of_component
+    ORDER BY size_of_component DESC
+
+  getAuthorCitedConnectedness: | # Graph connectedness - generally shows that the graph is disconnected
+    CALL algo.unionFind.stream('Author', 'CITES', {})
+    YIELD nodeId,setId
+    RETURN setId,count(*) as size_of_component
+    ORDER BY size_of_component DESC
+    
+  getAuthorCommunityStats: |
+    MATCH (a:Author)
+    WITH 
+    a.community AS community,
+    count(a) AS size
+    ORDER BY size DESC
+    MATCH (a:Author)<-[:HAS_AUTHOR]-(b:Article)
+    WHERE a.community = community
+    RETURN
+    a.community as community, 
+    size as authors, 
+    count(distinct b) as articles,
+    sum(distinct b.pagerank)/count(distinct b) as avgPagerank
+    
+  getAuthorCommunityAffiliations: |
+    MATCH (a:Author)
+    WITH 
+    a.community AS community,
+    count(a) AS size
+    MATCH (a:Author)-[:HAS_AFFILIATION]->(b:Affiliation)
+    WHERE a.community = community
+    RETURN
+    a.community as community, 
+    size, 
+    collect(b.organisationName) as affiliations
+
+  getAuthorCommunityMeshCodes: |
+    MATCH (a:Author)
+    WITH 
+    a.community AS community,
+    count(a) AS size
+    MATCH (a:Author)-[:HAS_AUTHOR]-(t:Article)
+    WHERE a.community = community
+    WITH DISTINCT
+    community,
+    size,
+    id(t) as articleId
+    MATCH (t2:Article) -[:HAS_MESH]-> (k:MeshCode)
+    WHERE id(t2)=articleId
+    RETURN 
+    community,
+    size as authors,
+    count(distinct t2) as articles, 
+    collect(k.term) as terms
+
+  getAuthorCommunityKeywords: |
+    MATCH (a:Author)
+    WITH 
+    a.community AS community,
+    count(a) AS size
+    MATCH (a:Author)-[:HAS_AUTHOR]-(t:Article)
+    WHERE a.community = community
+    WITH DISTINCT
+    community,
+    size,
+    id(t) as articleId
+    MATCH (t2:Article) -[:HAS_MESH]-> (k:MeshCode)
+    WHERE id(t2)=articleId
+    RETURN 
+    community,
+    size as authors,
+    count(distinct t2) as articles, 
+    collect(k.term) as terms
+    
+  getAuthorCommunityArticles: |
+    MATCH (a:Author)
+    WITH 
+    a.community AS community,
+    count(a) AS size
+    MATCH (a:Author)-[:HAS_AUTHOR]-(t:Article)
+    WHERE a.community = community
+    RETURN DISTINCT
+    community,
+    size,
+    id(t) as articleId,
+    t.pagerank as pagerank
+
+  getAuthorCommunityTitlesAbstracts: |
+    MATCH (a:Author)
+    WITH 
+    a.community AS community,
+    count(a) AS size
+    ORDER BY size DESC
+    MATCH (a:Author)-[:HAS_AUTHOR]-(t:Article)
+    WHERE a.community = community
+    RETURN DISTINCT
+    id(t) as nodeId,
+    a.community as community,
+    t.articleCommunity as articleCommunity,
+    t.doi as doi,
+    t.pmid as pmid,
+    "Expand" in labels(t) as isOriginalSearch,
+    size,
+    t.title as title,
+    t.abstract as abstract
+    
+  getAuthorCoauthorHarmonicCentrality: | # closeness
+    MATCH (a:Author)-[:HAS_AFFILIATION]->(b:Affiliation)
+    RETURN 
+    a.authorLabel, 
+    a.lastName as lastName,
+    a.firstName as firstName,
+    a.initials as initials,
+    head(collect(b.organisationName)) AS affiliation, 
+    a.harmonic as harmonic,
+    a.citesHarmonic as citesHarmonic,
+    a.pagerank as pagerank, 
+    a.community as community
+    ORDER BY a.harmonic DESC;
+
+# KEYWORDS
+  getKeywordCooccurConnectedness: | # Check connectedness
+    CALL algo.unionFind.stream('Keyword', 'CO_OCCUR', {})
+    YIELD nodeId,setId
+    RETURN setId,count(*) as size_of_component
+    ORDER BY size_of_component DESC
+
+  getKeywordCooccurCommunities: | # Community
+    CALL algo.louvain.stream('Keyword', 'CO_OCCUR', {direction:'both'}) 
+    YIELD nodeId, community 
+    MATCH (a:Keyword) WHERE id(a) = nodeId
+    AND a.occurrences > 2
+    RETURN collect(a.term) as terms, sum(a.occurrences) as count, community 
+    ORDER BY community
+
+  getKeywordCooccurMutualInformation: | # export for further visualisation
+    MATCH (m:Keyword)-[r:CO_OCCUR]->(n:Keyword)
+    RETURN 
+    n.term AS sourceTerm, 
+    m.term AS targetTerm, 
+    r.pmi AS pmi, 
+    r.npmi AS npmi, 
+    r.cooccurrences AS cooccurrences, 
+    m.occurrences AS sourceOccurrences, 
+    n.occurrences AS targetOccurrences, 
+    r.total AS totalOccurrences
+    ORDER BY cooccurrences DESC
+
+  getKeywordMutualInformation: | # Mutual information
+    MATCH (m:Keyword)-[r:CO_OCCUR]->(n:Keyword) RETURN sum(r.pmi*r.probability) as mutualInformation
+    
+# MESH CODES
+
+  getCooccurConnectedness: | # Check connectedness Connected graph
+    CALL algo.unionFind.stream('MeshCode', 'CO_OCCUR', {})
+    YIELD nodeId,setId
+    RETURN setId,count(*) as size_of_component
+    ORDER BY size_of_component DESC
+    
+  getMeshCodeCooccurCommunities: | # Community  - not so useful
+    CALL algo.louvain.stream('MeshCode', 'CO_OCCUR', {direction:'both'}) 
+    YIELD nodeId, community 
+    MATCH (a:MeshCode) WHERE id(a) = nodeId
+    AND a.occurrences > 10
+    RETURN collect(a.term) as terms, sum(a.occurrences) as count, community 
+    ORDER BY community
+
+  getMeshCodeCooccurMutualInformation: | # export for further visualisation
+    MATCH (m:MeshCode)-[r:CO_OCCUR]->(n:MeshCode) 
+    RETURN 
+    n.term AS sourceTerm, 
+    m.term AS targetTerm, 
+    r.pmi AS pmi, 
+    r.npmi AS npmi, 
+    r.cooccurrences AS cooccurrences, 
+    m.occurrences AS sourceOccurrences, 
+    n.occurrences AS targetOccurrences, 
+    r.total AS totalOccurrences
+    ORDER BY cooccurrences DESC
+
+  getMeshCodeMutualInformation: | # Mutual information
+    MATCH (m:MeshCode)-[r:CO_OCCUR]->(n:MeshCode) RETURN sum(r.pmi*r.probability) as mutualInformation
+
+
+config:
+  stopwordsForAffiliation: |
+    university
+    of
+    the
+    college
+    department
+    division
+    research
+    centre
+    center
+    null
+  stopwordsForText: |
+    i
+    me
+    my
+    myself
+    we
+    our
+    ours
+    ourselves
+    you
+    your
+    yours
+    yourself
+    yourselves
+    he
+    him
+    his
+    himself
+    she
+    her
+    hers
+    herself
+    it
+    its
+    itself
+    they
+    them
+    their
+    theirs
+    themselves
+    what
+    which
+    who
+    whom
+    this
+    that
+    these
+    those
+    am
+    is
+    are
+    was
+    were
+    be
+    been
+    being
+    have
+    has
+    had
+    having
+    do
+    does
+    did
+    doing
+    a
+    an
+    the
+    and
+    but
+    if
+    or
+    because
+    as
+    until
+    while
+    of
+    at
+    by
+    for
+    with
+    about
+    against
+    between
+    into
+    through
+    during
+    before
+    after
+    above
+    below
+    to
+    from
+    up
+    down
+    in
+    out
+    on
+    off
+    over
+    under
+    again
+    further
+    then
+    once
+    here
+    there
+    when
+    where
+    why
+    how
+    all
+    any
+    both
+    each
+    few
+    more
+    most
+    other
+    some
+    such
+    no
+    nor
+    not
+    only
+    own
+    same
+    so
+    than
+    too
+    very
+    s
+    t
+    can
+    will
+    just
+    don
+    should
+    now
+    null
