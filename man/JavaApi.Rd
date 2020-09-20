@@ -21,11 +21,49 @@ J = JavaApi$new();
 	\subsection{Public methods}{
 		\itemize{
 			\item \code{JavaApi$new()}
-			\item \href{#method-CitationGraph-new}{\code{J$CitationGraph$new(secrets, graphDb, graphConf, working, output)}}
+			\item \href{#method-CitationGraphAnalyser-new}{\code{J$CitationGraphAnalyser$new(graph)}}
+			\item \href{#method-CitationGraph-new}{\code{J$CitationGraph$new(secrets, working)}}
 			\item \href{#method-CitationGraph-fromPropertyFile}{\code{J$CitationGraph$fromPropertyFile(propFilename)}}
 		}
 	}
 
+	\if{html}{\out{<hr>}}
+	\if{html}{\out{<a id="method-new"></a>}}
+	
+	\subsection{Method \code{CitationGraphAnalyser$new()}}{
+		
+	}
+
+	\subsection{Usage}{
+		\if{html}{\out{<div class="r">}}
+		\preformatted{
+  library(jlitrev)
+  J <- JavaApi$new()
+  J$CitationGraphAnalyser$new(graph)
+		}
+		\if{html}{\out{</div>}}
+	}
+	
+	\subsection{Arguments}{
+		\if{html}{\out{<div class="arguments">}}
+		\describe{
+			\itemize{
+				\item{graph}{ - (java expects a uk.co.terminological.literaturereview.CitationGraph)}
+			}
+		}
+		\if{html}{\out{</div>}}
+	}
+
+	\subsection{Returns}{
+		R6 CitationGraphAnalyser object: 
+	}
+
+	\subsection{Examples}{
+		\if{html}{\out{<div class="r example copy">}}
+		\preformatted{
+		}
+		\if{html}{\out{</div>}}
+	}
 	\if{html}{\out{<hr>}}
 	\if{html}{\out{<a id="method-new"></a>}}
 	
@@ -38,7 +76,7 @@ J = JavaApi$new();
 		\preformatted{
   library(jlitrev)
   J <- JavaApi$new()
-  J$CitationGraph$new(secrets, graphDb, graphConf, working, output)
+  J$CitationGraph$new(secrets, working)
 		}
 		\if{html}{\out{</div>}}
 	}
@@ -48,10 +86,7 @@ J = JavaApi$new();
 		\describe{
 			\itemize{
 				\item{secrets}{ - (java expects a java.lang.String)}
-				\item{graphDb}{ - (java expects a java.lang.String)}
-				\item{graphConf}{ - (java expects a java.lang.String)}
 				\item{working}{ - (java expects a java.lang.String)}
-				\item{output}{ - (java expects a java.lang.String)}
 			}
 		}
 		\if{html}{\out{</div>}}

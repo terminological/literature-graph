@@ -64,9 +64,10 @@
 			<version>1.21</version>
 		</dependency>
 		<dependency>
-			<groupId>com.github.terminological</groupId>
+<!-- 			<groupId>com.github.terminological</groupId> -->
+			<groupId>uk.co.terminological</groupId>
 			<artifactId>r-jsr223-runtime</artifactId>
-			<version>1.03</version>
+			<version>1.04</version>
 		</dependency>
 		<!-- https://mvnrepository.com/artifact/org.bouncycastle/bcprov-jdk15on -->
 		<dependency>
@@ -102,11 +103,11 @@
 			</plugin>
 			<plugin>
 				<!-- DEVELOPMENT -->
-				<!-- <groupId>uk.co.terminological</groupId>-->
+				<groupId>uk.co.terminological</groupId>
 				<!-- DEPLOYMENT -->
-				<groupId>com.github.terminological</groupId>
+<!-- 				<groupId>com.github.terminological</groupId> -->
 				<artifactId>r-jsr223-maven-plugin</artifactId>
-				<version>1.03</version>
+				<version>1.04</version>
 				<configuration>
 					<packageData>
 						<title>R Java literature graph</title>

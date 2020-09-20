@@ -4,6 +4,7 @@ JavaApi = R6::R6Class("JavaApi", public=list(
 	#### fields ----
 	.engine = NULL,
 	.objId = 0,
+	CitationGraphAnalyser = NULL,
 	CitationGraph = NULL,
   
  	#### constructor ----
@@ -24,28 +25,39 @@ JavaApi = R6::R6Class("JavaApi", public=list(
 	'
 	
 	# initialise constructor and static class definitions
+	self$CitationGraphAnalyser = list(
+		new = function(graph) {
+			# constructor
+			# copy parameters
+		self$.engine %@% paste0('tmp_graph = objs[',graph$.objId,']');  # copy parameter by reference
+			objId = self$.engine %~% '
+				synchronized(objs) {
+					objs[nextObjId] = new uk.co.terminological.literaturereview.CitationGraphAnalyser(tmp_graph);
+					nextObjId = nextObjId+1 
+				}
+				return nextObjId-1;
+			'
+			# delete parameters
+			self$.engine$remove("tmp_graph")
+			return(CitationGraphAnalyser$new(self$.engine, objId))
+		}	
+	)
 	self$CitationGraph = list(
-		new = function(secrets, graphDb, graphConf, working, output) {
+		new = function(secrets, working) {
 			# constructor
 			# copy parameters
 		self$.engine$tmp_secrets = secrets; # copy parameter by value
-		self$.engine$tmp_graphDb = graphDb; # copy parameter by value
-		self$.engine$tmp_graphConf = graphConf; # copy parameter by value
 		self$.engine$tmp_working = working; # copy parameter by value
-		self$.engine$tmp_output = output; # copy parameter by value
 			objId = self$.engine %~% '
 				synchronized(objs) {
-					objs[nextObjId] = new uk.co.terminological.literaturereview.CitationGraph(tmp_secrets, tmp_graphDb, tmp_graphConf, tmp_working, tmp_output);
+					objs[nextObjId] = new uk.co.terminological.literaturereview.CitationGraph(tmp_secrets, tmp_working);
 					nextObjId = nextObjId+1 
 				}
 				return nextObjId-1;
 			'
 			# delete parameters
 			self$.engine$remove("tmp_secrets")
-			self$.engine$remove("tmp_graphDb")
-			self$.engine$remove("tmp_graphConf")
 			self$.engine$remove("tmp_working")
-			self$.engine$remove("tmp_output")
 			return(CitationGraph$new(self$.engine, objId))
 		}	,
 		fromPropertyFile = function(propFilename) {
@@ -88,6 +100,92 @@ Object = R6::R6Class("Object", public=list(
 	}
 ))
 
+CitationGraphAnalyser = R6::R6Class("CitationGraphAnalyser", public=list(
+	.engine = NULL,
+	.objId = NULL,
+	initialize = function(engine,objectId){
+		self$.engine = engine;
+		self$.objId = objectId;
+	},
+	setReferenceFormat = function(referenceFormat) {
+		# copy parameters
+		self$.engine$tmp_referenceFormat = referenceFormat; # pass parameter by value
+		self$.engine$tmp2_objId = self$.objId;
+		#execute call on instance .objId returning a new (or the same) objId by reference   
+		objId = self$.engine %~% '
+			def tmp = objs[tmp2_objId].setReferenceFormat(tmp_referenceFormat);
+			// if the result the same object as the original? e.g. a fluent method
+			if (tmp.is(objs[tmp2_objId])) {
+				return tmp2_objId; 
+			} else {
+				synchronized(objs) {
+					objs[nextObjId] = tmp;
+					nextObjId = nextObjId+1; 
+				}
+				return nextObjId-1;
+			}
+		'
+		# delete parameters
+		self$.engine$remove("tmp2_objId")
+		self$.engine$remove("tmp_referenceFormat")
+		invisible(NULL)
+	},
+	executeQuery = function(qryName) {
+		# copy parameters
+		self$.engine$tmp_qryName = qryName; # pass parameter by value
+		self$.engine$tmp2_objId = self$.objId;
+		#execute call on instance .objId returning a result by value
+		out = self$.engine %~% '
+			return objs[tmp2_objId].executeQuery(tmp_qryName);
+		'
+		# delete parameters
+		self$.engine$remove("tmp2_objId")
+		self$.engine$remove("tmp_qryName")
+		return(out)
+	},
+	shutdown = function() {
+		# copy parameters
+		self$.engine$tmp2_objId = self$.objId;
+		#execute call on instance .objId returning a new (or the same) objId by reference   
+		objId = self$.engine %~% '
+			def tmp = objs[tmp2_objId].shutdown();
+			// if the result the same object as the original? e.g. a fluent method
+			if (tmp.is(objs[tmp2_objId])) {
+				return tmp2_objId; 
+			} else {
+				synchronized(objs) {
+					objs[nextObjId] = tmp;
+					nextObjId = nextObjId+1; 
+				}
+				return nextObjId-1;
+			}
+		'
+		# delete parameters
+		self$.engine$remove("tmp2_objId")
+		invisible(NULL)
+	},
+	getQueryNames = function() {
+		# copy parameters
+		self$.engine$tmp2_objId = self$.objId;
+		#execute call on instance .objId returning a result by value
+		out = self$.engine %~% '
+			return objs[tmp2_objId].getQueryNames();
+		'
+		# delete parameters
+		self$.engine$remove("tmp2_objId")
+		return(out)
+	},
+	print = function() {
+		self$.engine$tmp2_objId = self$.objId;
+		out = self$.engine %~% '
+			return objs[tmp2_objId].toString();
+		'
+		self$.engine$remove("tmp2_objId")
+		print(out)
+		invisible(self)
+	}
+))
+
 CitationGraph = R6::R6Class("CitationGraph", public=list(
 	.engine = NULL,
 	.objId = NULL,
@@ -117,7 +215,7 @@ CitationGraph = R6::R6Class("CitationGraph", public=list(
 		if (objId == self$.objId) {
 			invisible(self) # e.g. a fluent method
 		} else {
-			out = Object$new(self$.engine, objId)
+			out = CitationGraphAnalyser$new(self$.engine, objId)
 			return(out)
 		}
 	},

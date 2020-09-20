@@ -13,6 +13,7 @@ Version: 0.01
 Classes:
 \itemize{ 
 	\item \code{JavaApi}
+	\item \code{CitationGraphAnalyser}
 	\item \code{CitationGraph}
 }
 }

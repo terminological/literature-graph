@@ -9,9 +9,12 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Map.Entry;
 import java.util.concurrent.TimeUnit;
 
 import org.neo4j.driver.v1.AuthTokens;
@@ -32,9 +35,16 @@ import com.google.inject.internal.util.Lists;
 import uk.co.terminological.bibliography.CiteProcProvider;
 import uk.co.terminological.bibliography.CiteProcProvider.Format;
 import uk.co.terminological.bibliography.record.PrintRecord;
+import uk.co.terminological.datatypes.FluentMap;
+import uk.co.terminological.jsr223.RClass;
 import uk.co.terminological.jsr223.RMethod;
+import uk.co.terminological.jsr223.ROutput;
 import uk.co.terminological.literaturegraph.Shim;
 
+@RClass(
+		imports = {"ggplot2","dplyr"},
+		suggests = {"roxygen2","devtools"}
+		)
 public class CitationGraphAnalyser {
 
 	static Logger log = LoggerFactory.getLogger(CitationGraphAnalyser.class);
@@ -81,15 +91,16 @@ public class CitationGraphAnalyser {
 	 * Writes a named query defined in cypherQuery.yaml to a dataframe file. 
 	 */
 	@RMethod
-	public List<Map<String,Object>> executeQuery(String qryName) {
+	public ROutput.Dataframe executeQuery(String qryName) {
 		try ( Session session = driver.session() ) {
 			String qry = queries.get(qryName);
 			System.out.println("Executing query: "+qryName);
-			List<Map<String,Object>> out2 = session.readTransaction( tx -> {
+			ROutput.Dataframe out2 = session.readTransaction( tx -> {
 
 				StatementResult qryR = tx.run( qry );
 				List<Record> res = qryR.list();
 
+				log.debug("processing records: "+res.size());
 				CiteProcProvider prov = CiteProcProvider.create(this.referenceFormat, Format.text);
 				List<Integer> ids = new ArrayList<>(); 
 				int i = 0;
@@ -105,32 +116,41 @@ public class CitationGraphAnalyser {
 					i++;
 				}
 
+				log.debug("processing citations: "+prov.size()+"="+ids.size());
 							
 				List<String> cits = new ArrayList<>();
 				
 				try {
-				if (!prov.isEmpty()) {
-					cits = Arrays.asList(
+					
+					
+					if (!prov.isEmpty()) {
+						cits = Arrays.asList(
 						prov.orderedCitations().getEntries());
 					}
-				
+					log.debug("generated citations: "+cits.size());
+					
 				} catch (Exception e) {
 					e.printStackTrace(System.out);
 				};
 
-				List<Map<String,Object>> out = new ArrayList<Map<String,Object>>();
-				
+				log.debug("assembling dataframe");
+				ArrayList<Map<String,Object>> out = new ArrayList<Map<String,Object>>();
 				
 				int i2 = 0;
 				for (Record r:res) {
-					Map<String,Object> tmp = r.asMap();
-					Integer tmp2 = ids.indexOf(i2);
+					Map<String,Object> tmp = FluentMap.create(r.asMap()); 
+					int tmp2 = ids.indexOf(i2);
+					log.debug("retrieving citation: "+tmp2);
 					if (tmp2 != -1) {
 						tmp.put("citation", cits.get(tmp2).trim());
 					}
+					out.add(tmp);
 					i2++;
+					
 				}
-				return out;
+				log.debug("assembled dataframe: "+cits.size());
+				
+				return out.stream().collect(ROutput.mapsToDataframe());
 			});
 			return out2;
 		}	
@@ -138,16 +158,44 @@ public class CitationGraphAnalyser {
 
 	@RMethod
 	public void shutdown() {
+		log.info("Shutting down");
 		driver.closeAsync();
 	}
 			
 	@RMethod
 	public List<String> getQueryNames() {
-		List<String> out = Lists.newArrayList(queries.values());
+		List<String> out = Lists.newArrayList(queries.keySet());
 		out.removeIf(s -> !s.contains("get"));
+		Collections.sort(out);
 		return out;
 	}
 	
 
+	
+	public static <K> LinkedHashMap<K,Object> ensureSafe(Map<K,Object> input) {
+		if (input == null) return null;
+		LinkedHashMap<K,Object> out = new LinkedHashMap<K,Object>();
+		boolean colMajor = input.values().stream().filter(o -> o != null).anyMatch(o -> o.getClass().isArray());
+		if (colMajor) {
+			for(Entry<K,Object> entry: input.entrySet()) {
+				if (entry.getValue() == null || ROutput.supportedArrayOutputs.contains(entry.getValue().getClass())) {
+					out.put(entry.getKey(), entry.getValue());
+				} else {
+					String[] tmp = Arrays.stream((Object[]) entry.getValue()).map(Object::toString).toArray(String[]::new);
+					out.put(entry.getKey(), tmp);
+					
+				}
+			}
+		} else {
+			for(Entry<K,Object> entry: input.entrySet()) {
+				if (entry.getValue() == null || ROutput.supportedLengthOneOutputs.contains(entry.getValue().getClass())) {
+					out.put(entry.getKey(), entry.getValue());
+				} else {
+					out.put(entry.getKey(), entry.getValue().toString());
+				}
+			}
+		}
+		return(out);
+	}
     
 }

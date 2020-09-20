@@ -29,6 +29,8 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.apache.log4j.BasicConfigurator;
+import org.apache.log4j.ConsoleAppender;
 import org.apache.log4j.FileAppender;
 import org.apache.log4j.Level;
 import org.apache.log4j.PatternLayout;
@@ -110,15 +112,37 @@ public class CitationGraph {
 	 */
 	@RMethod
 	public CitationGraph(String secrets, String working) throws IOException, BibliographicApiException, AnalysisException {
+		
 		workingDir = Paths.get(working);
 		secretsPath = Paths.get(secrets);
+		
+		//BasicConfigurator.configure();
+		org.apache.log4j.Logger.getRootLogger().setLevel(org.apache.log4j.Level.toLevel("warn"));
+		FileAppender fa = new FileAppender();
+		fa.setName("FileLogger");
+		fa.setFile(workingDir.resolve("build.log").toString());
+		fa.setLayout(new PatternLayout("%d %-5p [%c{1}] %m%n"));
+		fa.setThreshold(Level.DEBUG);
+		fa.setAppend(false);
+		fa.activateOptions();
+		org.apache.log4j.Logger.getRootLogger().addAppender(fa);
+		
+		ConsoleAppender cs = new ConsoleAppender();
+		cs.setName("ConsoleLogger");
+		cs.setLayout(new PatternLayout("%d %-5p [%c{1}] %m%n"));
+		cs.setThreshold(Level.INFO);
+		cs.activateOptions();
+		
+		org.apache.log4j.Logger.getRootLogger().addAppender(cs);
+		
+		log.info("logging initialised");
+		
+		
 		cachePath = workingDir.resolve("cache");
 		graphDbPath = workingDir.resolve("db");
 		graphConfPath = workingDir.resolve("neo4j.conf");
 		
-		
-		//BasicConfigurator.configure();
-		org.apache.log4j.Logger.getRootLogger().setLevel(Level.WARN);
+		log.debug("check directories exist");
 		
 		FluentList.create(
 			workingDir,
@@ -126,36 +150,30 @@ public class CitationGraph {
 			workingDir.resolve("certificates"),
 			workingDir.resolve("plugins")
 		).forEach(
-			StreamExceptions.ignore(p -> {
+			StreamExceptions.rethrow(p -> {
 				if (!Files.exists(p)) Files.createDirectories(p);
 		}));
+		
+		log.debug("check files exist");
 		
 		FluentList.create(
 			"neo4j.conf",
 			"plugins/apoc-3.5.0.1-all.jar",
 			"plugins/graph-algorithms-algo-3.5.0.1.jar"
-		).forEach(StreamExceptions.ignore(s -> {
+		).forEach(StreamExceptions.rethrow(s -> {
 			Path p = workingDir.resolve(s);
+			
 			if (!Files.exists(p)) {
-				Files.copy(CitationGraph.class.getResourceAsStream(s),p);
+				log.debug("copying "+s+" to "+p);
+				Files.copy(CitationGraph.class.getResourceAsStream("/"+s),p);
 			}
 		}));
 
+		log.debug("open graph and setup bibliographic APIs");
+		
 		biblioApi = BibliographicApis.create(secretsPath, cachePath);
 		graphApi = GraphDatabaseApi.create(graphDbPath, graphConfPath);
-		//TODO: APOC jars need ot be copied to plugins directory 
-
-		FileAppender fa = new FileAppender();
-		fa.setName("FileLogger");
-		fa.setFile(workingDir.resolve("build.log").toString());
-		fa.setLayout(new PatternLayout("%d %-5p [%c{1}] %m%n"));
-		fa.setThreshold(Level.INFO);
-		fa.setAppend(false);
-		fa.activateOptions();
-
-		//add appender to any Logger (here is root)
 		
-		org.apache.log4j.Logger.getRootLogger().addAppender(fa);
 	}
 
 	private static String fromProperty(Properties prop, String name) {
@@ -473,7 +491,9 @@ public class CitationGraph {
 					.toDatabase(Database.PUBMED)
 					.command(Command.NEIGHBOR)
 					.withLinkname("pubmed_pubmed_refs")
-					.execute().get().getLinks();
+					.execute().stream()
+					.flatMap(u -> u.getLinks().stream())
+					.collect(Collectors.toList());
 
 			log.info("Entrez found "+tmp.size()+" pubmed articles referenced by pubmed articles");
 
